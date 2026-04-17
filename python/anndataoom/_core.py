@@ -846,15 +846,65 @@ class AnnDataOOM:
     def obs_vector(self, key: str, *, layer: str | None = None) -> np.ndarray:
         """Return a 1D array for a given gene (var name) or obs column.
 
-        For gene lookups, this extracts the column chunk-by-chunk so RAM
-        usage stays bounded even for million-cell datasets.
+        When no in-memory cache exists, a gene lookup streams the parent
+        matrix chunk-by-chunk — that's a full ~O(nnz) disk scan for a single
+        column. For repeated plotting calls, call :meth:`cache_X` once to
+        materialise X into an in-memory CSC matrix; subsequent column reads
+        then run in a few milliseconds.
         """
         if key in self._obs.columns:
             return self._obs[key].values
         # Must be a var name
         j = self._var.index.get_loc(key)
+
+        # Fast path: opt-in CSC cache
+        cache = self._get_cache(layer)
+        if cache is not None:
+            col = cache[:, j]
+            if issparse(col):
+                col = col.toarray()
+            return np.asarray(col, dtype=np.float32).ravel()
+
         source = self._layers[layer] if layer is not None else self._X
         return _extract_column(source, j, n_obs=self._n_obs)
+
+    def _get_cache(self, layer):
+        attr = '_X_cache_csc' if layer is None else f'_layer_cache_csc_{layer}'
+        return getattr(self, attr, None)
+
+    def cache_X(self, layer: str | None = None, force: bool = False) -> None:
+        """Materialise ``adata.X`` (or a layer) into an in-memory CSC sparse
+        matrix for fast repeated column access.
+
+        Use this before interactive plotting over multiple genes. The first
+        call pays a full sequential read of the backed matrix
+        (dominant cost for million-cell datasets); every subsequent
+        :meth:`obs_vector` / gene-coloured plot then returns in ~ms.
+
+        Memory cost: approximately ``nnz * 12`` bytes (4 idx + 8 value per
+        non-zero). A 1M × 45K matrix at 5% density ≈ ~27 GB.
+
+        Parameters
+        ----------
+        layer
+            Layer name, or ``None`` to cache ``.X``.
+        force
+            Re-materialise even if a cache already exists.
+        """
+        attr = '_X_cache_csc' if layer is None else f'_layer_cache_csc_{layer}'
+        if hasattr(self, attr) and getattr(self, attr) is not None and not force:
+            return
+        source = self._X if layer is None else self._layers[layer]
+        X = source[:]
+        if issparse(X):
+            X = X.tocsc()
+        setattr(self, attr, X)
+
+    def clear_cache(self, layer: str | None = None) -> None:
+        """Drop the in-memory CSC cache populated by :meth:`cache_X`."""
+        attr = '_X_cache_csc' if layer is None else f'_layer_cache_csc_{layer}'
+        if hasattr(self, attr):
+            setattr(self, attr, None)
 
     def var_vector(self, key: str, *, layer: str | None = None) -> np.ndarray:
         """Return a 1D array for a given obs name or var column."""
@@ -1308,9 +1358,19 @@ def _copy_axis_arrays(axis_arrays) -> dict:
 def _extract_column(source, j: int, n_obs: int, chunk_size: int = 5000) -> np.ndarray:
     """Extract column ``j`` from a BackedArray/ndarray/sparse matrix.
 
-    Streams through chunks so that the working memory stays bounded
-    (chunk_size × n_vars), which matters for million-cell datasets.
+    For subset views (``_SubsetBackedArray``) we use direct row-indexed
+    reads so an ``obs_vector('gene')`` on a 1M → 4k cell subset touches
+    only those 4k parent rows instead of scanning the full matrix.
+
+    For a plain (non-subsetted) ``BackedArray`` we stream chunks so the
+    working set stays bounded to ``chunk_size × n_vars``.
     """
+    if isinstance(source, _SubsetBackedArray):
+        col = source[:, j]
+        if issparse(col):
+            col = col.toarray()
+        return np.asarray(col, dtype=np.float32).ravel()
+
     if isinstance(source, BackedArray):
         result = np.empty(n_obs, dtype=np.float32)
         for start, end, chunk in source.chunked(chunk_size):

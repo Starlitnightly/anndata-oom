@@ -119,37 +119,67 @@ class BackedArray:
             return self._elem[slice(start, end)]
 
     def _read_row_indices(self, indices) -> np.ndarray | spmatrix:
-        """Read specific row indices from the backing store."""
+        """Read specific row indices from the backing store.
+
+        Strategy for the anndata-rs path: the rust backend supports
+        arbitrary-offset slice reads (``elem[a:b]``) very efficiently —
+        ~2-250 ms depending on the width. For scattered index lists we
+        group them into contiguous runs (allowing small inter-row gaps)
+        and issue one slice read per run, then fancy-index the combined
+        in-memory matrix to restore the requested order. That beats the
+        full-file ``chunked()`` scan by a big margin when the subset
+        covers only part of the dataset.
+        """
         if self._is_rs:
-            # anndata_rs: no fancy indexing. Scan via chunked and collect target rows.
             indices = np.asarray(indices)
-            if len(indices) == 0:
+            n = len(indices)
+            if n == 0:
                 return np.empty((0, self._shape[1]))
-            idx_set = set(indices.tolist())
-            start, end = int(indices.min()), int(indices.max()) + 1
-            collected = {}
-            cs_size = max(min(end - start, 5000), DEFAULT_CHUNK_SIZE)
-            for data, cs, ce in self._elem.chunked(cs_size):
-                if cs >= end:
-                    break
-                if issparse(data):
-                    for local_i in range(data.shape[0]):
-                        global_i = cs + local_i
-                        if global_i in idx_set:
-                            collected[global_i] = data.getrow(local_i)
-                else:
-                    for local_i in range(data.shape[0]):
-                        global_i = cs + local_i
-                        if global_i in idx_set:
-                            collected[global_i] = data[local_i:local_i+1]
-                if len(collected) >= len(indices):
-                    break
-            rows = [collected[i] for i in indices if i in collected]
-            if not rows:
-                return np.empty((0, self._shape[1]))
-            if issparse(rows[0]):
-                return sp_vstack(rows).tocsr()
-            return np.vstack(rows)
+
+            # Sort + dedupe; we'll restore the caller's order at the end.
+            unique = np.unique(indices)
+
+            # Group into runs, merging gaps ≤ GAP_THRESHOLD. Small gaps
+            # cost very little extra data per slice read, but each slice
+            # call has fixed per-call overhead, so merging nearby runs
+            # wins. Empirically, 16 is a decent default on h5ad CSR.
+            GAP_THRESHOLD = 16
+            if len(unique) == 1:
+                breaks = np.array([], dtype=np.int64)
+            else:
+                diffs = np.diff(unique)
+                breaks = np.where(diffs > GAP_THRESHOLD)[0] + 1
+
+            run_starts = np.empty(len(breaks) + 1, dtype=np.int64)
+            run_ends = np.empty(len(breaks) + 1, dtype=np.int64)
+            prev = 0
+            splits = list(breaks) + [len(unique)]
+            for i, stop in enumerate(splits):
+                run_starts[i] = int(unique[prev])
+                run_ends[i] = int(unique[stop - 1]) + 1
+                prev = stop
+
+            # Read each run as a range slice
+            pieces = [self._elem[int(s):int(e)] for s, e in zip(run_starts, run_ends)]
+
+            # Combine once
+            if issparse(pieces[0]):
+                combined = pieces[0] if len(pieces) == 1 else sp_vstack(pieces).tocsr()
+            else:
+                combined = pieces[0] if len(pieces) == 1 else np.vstack(pieces)
+
+            # Build lookup: for each global index, its local position in `combined`.
+            # run k contributes (run_ends[k]-run_starts[k]) rows starting at
+            # cum_lens[k] in the combined matrix.
+            run_lens = run_ends - run_starts
+            run_offsets = np.concatenate(([0], np.cumsum(run_lens)[:-1]))
+            # Vectorised: find each index's run via searchsorted on run_starts.
+            run_of = np.searchsorted(run_starts, indices, side='right') - 1
+            local_positions = run_offsets[run_of] + (indices - run_starts[run_of])
+
+            if issparse(combined):
+                return combined[local_positions]
+            return combined[local_positions]
 
         try:
             return self._elem[indices]
