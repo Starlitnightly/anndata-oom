@@ -59,6 +59,19 @@ X (HDF5 on disk, Rust I/O via anndata-rs)
 | PCA (working set)      | Y, Q matrices (k=60)     | n_obs × 60 × 8 B|
 | X_pca                  | Final embedding          | n_obs × 50 × 4 B|
 
+> For a deeper look at the lazy operator model behind this — how nodes
+> compose, how data flows through the chain, and why subsetting stays O(1) —
+> see [docs/transform-chain.md](docs/transform-chain.md).
+
+---
+
+## Documentation
+
+- [The Transform Chain](docs/transform-chain.md) — design walkthrough with
+  ASCII diagrams of the lazy operator model (`BackedArray`,
+  `_SubsetBackedArray`, `TransformedBackedArray`, `ScaledBackedArray`) and
+  how chunked reads flow through it.
+
 ---
 
 ## Installation
