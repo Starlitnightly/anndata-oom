@@ -26,6 +26,16 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
+def _drop_unused_categories(df: pd.DataFrame) -> None:
+    """Remove unused categories from every categorical column of ``df`` in
+    place — mirrors anndata's subset behaviour so plot legends/palettes
+    reflect only categories actually present in the subset."""
+    for col in df.columns:
+        series = df[col]
+        if isinstance(series.dtype, pd.CategoricalDtype):
+            df[col] = series.cat.remove_unused_categories()
+
 # Register AnnDataOOM as a virtual subclass of anndata.AnnData so that
 # isinstance(oom_obj, AnnData) returns True. This lets plotting functions
 # and other code that type-checks against AnnData work without modification.
@@ -546,18 +556,22 @@ class AnnDataOOM:
         new._origin_file = getattr(self, "_origin_file", None)
         new._repr_cache = {}
 
-        # obs / var
+        # obs / var — after row slicing, prune unused categories so a subset
+        # doesn't carry the full category list of the parent (matches anndata
+        # behaviour and keeps legends/palettes clean for downstream plots).
         if is_obs_all:
             new._obs = self._obs.copy()
         else:
             new._obs = self._obs.iloc[obs_int].reset_index(drop=True)
             new._obs.index = self._obs.index[obs_int]
+            _drop_unused_categories(new._obs)
 
         if is_var_all:
             new._var = self._var.copy()
         else:
             new._var = self._var.iloc[var_int].reset_index(drop=True)
             new._var.index = self._var.index[var_int]
+            _drop_unused_categories(new._var)
 
         new._n_obs = len(new._obs)
         new._n_vars = len(new._var)
