@@ -1,0 +1,27 @@
+[package]
+name = "anndataoom"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+authors = ["omicverse contributors"]
+description = "Out-of-memory AnnData — Rust extension for anndataoom Python package"
+license = "MIT"
+repository = "https://github.com/Starlitnightly/anndata-oom"
+readme = "README.md"
+
+[lib]
+name = "_backend"
+crate-type = ["cdylib"]
+
+[features]
+extension-module = ["pyo3/extension-module", "pyanndata/extension-module"]
+
+# We pin to a specific commit of scverse/anndata-rs for reproducible builds.
+# This is the same commit that snapatac2 currently uses.
+[dependencies]
+pyanndata = { git = "https://github.com/scverse/anndata-rs", rev = "cf0b312f2834884bd708595a63f12f34f1905b7b" }
+pyo3-log = "0.13"
+
+[dependencies.pyo3]
+version = "0.27"
+features = ["multiple-pymethods"]

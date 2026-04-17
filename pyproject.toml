@@ -1,0 +1,55 @@
+[build-system]
+requires = ["maturin>=1.4,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["extension-module"]
+python-source = "python"
+module-name = "anndataoom._backend"
+
+[project]
+name = "anndataoom"
+version = "0.1.0"
+description = "Out-of-memory AnnData powered by Rust (anndata-rs)"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "omicverse contributors" },
+]
+requires-python = ">=3.9"
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Rust",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+]
+keywords = ["anndata", "single-cell", "scrna-seq", "rust", "out-of-memory"]
+
+dependencies = [
+    "anndata>=0.8.0",
+    "numpy>=1.24",
+    "pandas>=1.5",
+    "scipy>=1.4",
+    "polars>=1.9,<1.32",
+    "h5py>=3.0",
+    "hdf5plugin>=4.0",
+    "pyarrow",
+]
+
+[project.optional-dependencies]
+test = ["pytest>=7.0"]
+dev = ["pytest>=7.0", "maturin>=1.4"]
+
+[project.urls]
+Homepage = "https://github.com/Starlitnightly/anndata-oom"
+Documentation = "https://github.com/Starlitnightly/anndata-oom"
+Repository = "https://github.com/Starlitnightly/anndata-oom"
+Issues = "https://github.com/Starlitnightly/anndata-oom/issues"
