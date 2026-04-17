@@ -1,17 +1,19 @@
 # Build and publish anndataoom wheels.
 #
-# On tag push (v*.*.*): builds wheels for Linux/macOS/Windows × CPython 3.9-3.13
-# and publishes them to PyPI via trusted publishing (OIDC — no API token needed).
+# On tag push (v*.*.*): builds wheels for multiple platforms and publishes
+# them to PyPI via trusted publishing (OIDC — no API token needed).
 #
 # Requires: in PyPI, register 'anndataoom' under a trusted publisher pointing to
 # this repo + this workflow file. See https://docs.pypi.org/trusted-publishers/
+#
+# Currently built: Linux x86_64 · macOS x86_64 · macOS arm64
+# Not yet: Linux aarch64 (ring ARM cross-compile fails), Windows (HDF5 CMake).
 
 name: Release
 
 on:
   push:
     tags: ['v*']
-  # Also allow manual runs + PRs (for testing, but skip publish)
   workflow_dispatch:
   pull_request:
     paths:
@@ -26,13 +28,16 @@ permissions:
 
 jobs:
   # ──────────────────────────────────────────────────────────────────────
-  # Linux x86_64 + aarch64  (manylinux)
+  # Linux x86_64 (manylinux)
+  # aarch64 temporarily disabled — `ring` crate fails to cross-compile
+  # (ARM asm needs explicit __ARM_ARCH in containerised builds).
   # ──────────────────────────────────────────────────────────────────────
   linux:
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
-        target: [x86_64, aarch64]
+        target: [x86_64]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -50,11 +55,12 @@ jobs:
           path: dist
 
   # ──────────────────────────────────────────────────────────────────────
-  # macOS x86_64 + arm64 (universal2 also possible; keeping separate for speed)
+  # macOS x86_64 + arm64
   # ──────────────────────────────────────────────────────────────────────
   macos:
     runs-on: macos-latest
     strategy:
+      fail-fast: false
       matrix:
         target: [x86_64, aarch64]
     steps:
@@ -73,31 +79,12 @@ jobs:
           path: dist
 
   # ──────────────────────────────────────────────────────────────────────
-  # Windows x86_64
+  # Windows temporarily disabled — hdf5-metno-src CMake build fails.
+  # TODO: pre-install vcpkg HDF5 and use HDF5_DIR env var.
   # ──────────────────────────────────────────────────────────────────────
-  windows:
-    runs-on: windows-latest
-    strategy:
-      matrix:
-        target: [x64]
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.x"
-          architecture: ${{ matrix.target }}
-      - name: Build wheels
-        uses: PyO3/maturin-action@v1
-        with:
-          target: ${{ matrix.target }}
-          args: --release --out dist --find-interpreter
-      - uses: actions/upload-artifact@v4
-        with:
-          name: wheels-windows-${{ matrix.target }}
-          path: dist
 
   # ──────────────────────────────────────────────────────────────────────
-  # Source distribution (for architectures without wheels)
+  # Source distribution
   # ──────────────────────────────────────────────────────────────────────
   sdist:
     runs-on: ubuntu-latest
@@ -120,7 +107,7 @@ jobs:
     name: Publish to PyPI
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [linux, macos, windows, sdist]
+    needs: [linux, macos, sdist]
     environment:
       name: pypi
       url: https://pypi.org/p/anndataoom
