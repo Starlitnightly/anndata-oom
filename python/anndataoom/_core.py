@@ -928,6 +928,28 @@ class AnnDataOOM:
         return np.asarray(data).ravel()
 
     # ------------------------------------------------------------------
+    # AnnData-compat helpers
+    # ------------------------------------------------------------------
+
+    def _sanitize(self) -> None:
+        """Convert string obs/var columns to ``pd.Categorical`` in-place.
+
+        Scanpy calls ``adata._sanitize()`` before plotting (``sc.pl.umap``,
+        ``sc.pl.embedding``, …) to normalise string annotations. This
+        is a minimal pandas-only implementation — no Rust round-trip.
+        """
+        for frame in (self._obs, self._var):
+            if frame is None:
+                continue
+            for col in frame.columns:
+                s = frame[col]
+                if s.dtype == "object":
+                    try:
+                        frame[col] = pd.Categorical(s)
+                    except Exception:
+                        pass
+
+    # ------------------------------------------------------------------
     # I/O
     # ------------------------------------------------------------------
 
