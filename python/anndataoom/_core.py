@@ -583,25 +583,31 @@ class AnnDataOOM:
         # X — create a _SubsetBackedArray that reads only needed rows/cols
         new._X = _SubsetBackedArray(self._X, obs_int, var_int, (new._n_obs, new._n_vars))
 
-        # obsm
+        # obsm — preserve sparsity (scipy.sparse supports row-indexed subsetting).
         new._obsm = {}
         for k, v in self._obsm.items():
             try:
                 if obs_int is not None:
-                    arr = np.asarray(v)
-                    new._obsm[k] = arr[obs_int]
+                    if issparse(v):
+                        new._obsm[k] = v[obs_int]
+                    else:
+                        arr = np.asarray(v)
+                        new._obsm[k] = arr[obs_int]
                 else:
                     new._obsm[k] = v
             except Exception:
                 new._obsm[k] = v
 
-        # varm
+        # varm — preserve sparsity.
         new._varm = {}
         for k, v in self._varm.items():
             try:
                 if var_int is not None:
-                    arr = np.asarray(v)
-                    new._varm[k] = arr[var_int]
+                    if issparse(v):
+                        new._varm[k] = v[var_int]
+                    else:
+                        arr = np.asarray(v)
+                        new._varm[k] = arr[var_int]
                 else:
                     new._varm[k] = v
             except Exception:
@@ -821,10 +827,12 @@ class AnnDataOOM:
             var=self._var.copy(),
         )
 
+        # Preserve sparsity in obsm / varm — ``np.asarray`` would degrade
+        # scipy.sparse matrices to object-dtype ndarrays.
         for k, v in self._obsm.items():
-            adata.obsm[k] = np.asarray(v)
+            adata.obsm[k] = v if issparse(v) else np.asarray(v)
         for k, v in self._varm.items():
-            adata.varm[k] = np.asarray(v)
+            adata.varm[k] = v if issparse(v) else np.asarray(v)
         for k, v in self._obsp.items():
             adata.obsp[k] = v
         for k, v in self._varp.items():
@@ -940,10 +948,13 @@ class AnnDataOOM:
             obs=self._obs.copy(),
             var=self._var.copy(),
         )
+        # Preserve sparsity — ``np.asarray`` would degrade scipy.sparse
+        # matrices to object-dtype ndarrays (breaking sparse obsm like
+        # ATAC fragment_paired matrices on persistence + reload).
         for k, v in self._obsm.items():
-            adata_meta.obsm[k] = np.asarray(v)
+            adata_meta.obsm[k] = v if issparse(v) else np.asarray(v)
         for k, v in self._varm.items():
-            adata_meta.varm[k] = np.asarray(v)
+            adata_meta.varm[k] = v if issparse(v) else np.asarray(v)
         for k, v in self._obsp.items():
             adata_meta.obsp[k] = v
         adata_meta.uns = deepcopy(self._uns)
@@ -953,7 +964,10 @@ class AnnDataOOM:
         with h5py.File(path, 'a') as f:
             n_obs, n_vars = self._n_obs, self._n_vars
 
-            # Write X
+            # Write X. The Rust backend (and anndata ≥ 0.8) expects
+            # ``encoding-type`` / ``encoding-version`` attributes on the
+            # X dataset — without them, ``oom.read`` panics with
+            # "Cannot read shape information from type 'Scalar(f32)'".
             if 'X' in f:
                 del f['X']
             # HDF5 chunks must have positive dimensions; fall back to contiguous
@@ -965,6 +979,8 @@ class AnnDataOOM:
                 compression='gzip' if use_chunks else None,
                 compression_opts=1 if use_chunks else None,
             )
+            ds.attrs['encoding-type'] = 'array'
+            ds.attrs['encoding-version'] = '0.2.0'
             if n_obs > 0 and n_vars > 0:
                 for start, end, chunk in self._X.chunked(1000):
                     if issparse(chunk):
@@ -986,6 +1002,8 @@ class AnnDataOOM:
                     compression='gzip' if use_chunks_l else None,
                     compression_opts=1 if use_chunks_l else None,
                 )
+                ds_l.attrs['encoding-type'] = 'array'
+                ds_l.attrs['encoding-version'] = '0.2.0'
                 if not use_chunks_l:
                     continue
                 if isinstance(layer, BackedArray):
@@ -1335,7 +1353,11 @@ def _copy_mapping(m) -> dict:
 def _copy_axis_arrays(axis_arrays) -> dict:
     """Copy anndata_rs PyAxisArrays to a plain dict.
 
-    PyAxisArrays has .keys() and .__getitem__(key) that returns numpy arrays.
+    PyAxisArrays has ``.keys()`` and ``.__getitem__(key)`` that returns
+    either a numpy array (dense) or a scipy.sparse matrix. We must
+    preserve sparsity — ``np.asarray`` would silently degrade a
+    scipy.sparse obsm entry (e.g. a chromosome-wide fragment matrix) to
+    an object-dtype 0-d ndarray.
     """
     if axis_arrays is None:
         return {}
@@ -1345,6 +1367,8 @@ def _copy_axis_arrays(axis_arrays) -> dict:
             try:
                 v = axis_arrays[k]
                 if isinstance(v, np.ndarray):
+                    result[k] = v.copy()
+                elif issparse(v):
                     result[k] = v.copy()
                 else:
                     result[k] = np.asarray(v)
